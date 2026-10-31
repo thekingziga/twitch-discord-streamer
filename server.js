@@ -8,6 +8,7 @@ const {
   getStreamInfo,
   getTopLiveStreams,
   searchLiveChannels,
+  fetchCleanMasterPlaylist,
   getMasterPlaylistUrl,
   rewritePlaylist,
   getAdStats,
@@ -202,24 +203,8 @@ app.get('/api/hls/:channel/master.m3u8', async (req, res) => {
   try {
     const cleanChannel = extractChannelName(req.params.channel);
     const requestedType = req.query.playerType || ADFREE_PLAYER_TYPES[0];
-    const masterUrl = await getMasterPlaylistUrl(cleanChannel, requestedType);
-
-    const upstream = await fetch(masterUrl, {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        Accept: 'application/x-mpegURL, application/vnd.apple.mpegurl, */*',
-      },
-    });
-
-    if (!upstream.ok) {
-      return res
-        .status(upstream.status)
-        .json({ error: `Channel "${cleanChannel}" is offline or unavailable (${upstream.status})` });
-    }
-
-    const m3u8Text = await upstream.text();
-    const rewritten = rewritePlaylist(m3u8Text, masterUrl);
+    const { m3u8Text, baseUrl } = await fetchCleanMasterPlaylist(cleanChannel, requestedType);
+    const rewritten = rewritePlaylist(m3u8Text, baseUrl);
 
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     res.setHeader('Cache-Control', 'no-store');

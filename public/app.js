@@ -264,7 +264,9 @@ async function refreshStreamMetadata(channel) {
     if (!res.ok) return;
     const info = await res.json();
 
-    if (typeof info.adsBlocked === 'number' && info.adsBlocked > 0) {
+    if (info.adblockSource) {
+      adblockBadgeEl.textContent = `🛡️ ${info.adblockSource}`;
+    } else if (typeof info.adsBlocked === 'number' && info.adsBlocked > 0) {
       adblockBadgeEl.textContent = `🛡️ AdBlock (${info.adsBlocked})`;
     }
 
