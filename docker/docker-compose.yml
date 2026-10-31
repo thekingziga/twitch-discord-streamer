@@ -1,7 +1,7 @@
 services:
-  twitch-discord-activity:
+  twitch-discord-bot:
     image: thekingziga/twitch-discord-streamer:latest
-    container_name: twitch-discord-activity
+    container_name: twitch-discord-bot
     restart: unless-stopped
     ports:
       - "${PORT:-3000}:3000"
