@@ -12,12 +12,14 @@
     <!-- Top Control Bar -->
     <header class="top-bar">
       <div class="brand">
-        <div class="twitch-logo" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-            <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z"/>
-          </svg>
-        </div>
-        <span class="brand-title">Twitch Party</span>
+        <button id="homeBtn" type="button" class="btn-home" title="Return to Twitch Home Page">
+          <div class="twitch-logo" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+              <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z"/>
+            </svg>
+          </div>
+          <span class="brand-title">Twitch Home</span>
+        </button>
         <span id="sdkBadge" class="sdk-badge" title="Connection mode">Browser Mode</span>
         <span id="adblockBadge" class="adblock-badge" title="HLS Stream AdBlocker & Low-Latency Prefetch Active">
           🛡️ AdBlock ON
@@ -28,25 +30,27 @@
         <input
           id="channelInput"
           type="text"
-          placeholder="Enter Twitch streamer or paste URL (e.g. shroud)..."
+          placeholder="Search live channels or paste streamer name (e.g. shroud)..."
           spellcheck="false"
         />
-        <button type="submit" class="btn-primary">Watch Together</button>
+        <button type="submit" class="btn-primary">Watch Channel</button>
       </form>
 
       <div class="right-controls">
-        <div class="control-group">
-          <label for="qualitySelect" class="sr-only">Quality</label>
-          <select id="qualitySelect" class="select-control" title="Stream Quality">
-            <option value="-1">Quality: Auto</option>
-          </select>
-        </div>
+        <div id="playerControlsGroup" class="player-controls-group hidden">
+          <div class="control-group">
+            <label for="qualitySelect" class="sr-only">Quality</label>
+            <select id="qualitySelect" class="select-control" title="Stream Quality">
+              <option value="-1">Quality: Auto</option>
+            </select>
+          </div>
 
-        <button id="liveEdgeBtn" type="button" class="btn-ghost" title="Click to jump to real-time live edge">
-          <span class="live-dot"></span>
-          <span>LIVE</span>
-          <span id="latencyText" class="latency-text">⚡</span>
-        </button>
+          <button id="liveEdgeBtn" type="button" class="btn-ghost" title="Click to jump to real-time live edge">
+            <span class="live-dot"></span>
+            <span>LIVE</span>
+            <span id="latencyText" class="latency-text">⚡</span>
+          </button>
+        </div>
 
         <div class="room-pill" title="Viewers synced in this Discord Voice Channel">
           <span>👥</span>
@@ -61,46 +65,73 @@
 
     <!-- Quick-Switch Channel History Bar -->
     <div class="quick-bar">
-      <span class="quick-label">Quick switch:</span>
+      <button id="quickHomeChip" type="button" class="chip active">🏠 Browse Live</button>
+      <span class="quick-label">Recent:</span>
       <div id="historyChips" class="chips-list"></div>
       <span id="syncedByText" class="synced-by"></span>
     </div>
 
-    <!-- Main Video Stage -->
-    <main id="videoStage" class="video-stage">
-      <video
-        id="videoPlayer"
-        playsinline
-        controls
-        autoplay
-        controlslist="nofullscreen nodownload noremoteplayback"
-      ></video>
+    <!-- Main Content Area: Twitch Home Grid OR Live Video Player -->
+    <div class="stage-wrapper">
+      <!-- Twitch Home Page View (Default) -->
+      <section id="homeView" class="home-view">
+        <div class="home-header">
+          <div>
+            <h1 id="homeHeading" class="home-title">Live Channels on Twitch</h1>
+            <p class="home-subtitle">Click any live stream below to watch together in your Discord voice channel</p>
+          </div>
+          <div class="home-actions">
+            <input
+              id="homeSearchInput"
+              type="text"
+              class="home-search-input"
+              placeholder="🔍 Filter or search live streams..."
+            />
+            <button id="refreshHomeBtn" type="button" class="btn-ghost">↻ Refresh</button>
+          </div>
+        </div>
 
-      <!-- Floating Fullscreen Toggle inside Video Stage (always works inside Discord Activity iframe) -->
-      <button
-        id="floatingFsBtn"
-        type="button"
-        class="floating-fs-btn"
-        title="Toggle Fullscreen (Press F or Double-Click Video)"
-      >
-        ⛶
-      </button>
+        <div id="homeGrid" class="home-grid">
+          <!-- Populated dynamically with live Twitch stream cards -->
+        </div>
+      </section>
 
-      <!-- Unmute / Autoplay Banner -->
-      <button id="unmuteBanner" class="unmute-banner hidden" type="button">
-        🔊 Click to Unmute Stream Audio
-      </button>
+      <!-- Main Video Stage (Hidden when on Twitch Home Page) -->
+      <main id="videoStage" class="video-stage hidden">
+        <video
+          id="videoPlayer"
+          playsinline
+          controls
+          autoplay
+          controlslist="nofullscreen nodownload noremoteplayback"
+        ></video>
 
-      <!-- Status Overlay (Loading / Offline / Error) -->
-      <div id="statusOverlay" class="status-overlay">
-        <div class="spinner" id="statusSpinner"></div>
-        <h2 id="statusTitle">Connecting to Twitch stream...</h2>
-        <p id="statusSubtitle">Fetching low-latency HLS stream...</p>
-      </div>
-    </main>
+        <!-- Floating Fullscreen Toggle inside Video Stage -->
+        <button
+          id="floatingFsBtn"
+          type="button"
+          class="floating-fs-btn"
+          title="Toggle Fullscreen (Press F or Double-Click Video)"
+        >
+          ⛶
+        </button>
 
-    <!-- Bottom Stream Metadata Footer -->
-    <footer class="stream-footer">
+        <!-- Unmute / Autoplay Banner -->
+        <button id="unmuteBanner" class="unmute-banner hidden" type="button">
+          🔊 Click to Unmute Stream Audio
+        </button>
+
+        <!-- Status Overlay (Loading / Offline / Error) -->
+        <div id="statusOverlay" class="status-overlay">
+          <div class="spinner" id="statusSpinner"></div>
+          <h2 id="statusTitle">Connecting to Twitch stream...</h2>
+          <p id="statusSubtitle">Fetching low-latency HLS stream...</p>
+        </div>
+      </main>
+    </div>
+
+    <!-- Bottom Stream Metadata Footer (Visible when watching a stream) -->
+    <footer id="streamFooter" class="stream-footer hidden">
       <div class="streamer-meta">
         <img
           id="streamerAvatar"

@@ -7,6 +7,7 @@ const { WebSocketServer } = require('ws');
 const {
   getStreamInfo,
   getTopLiveStreams,
+  searchLiveChannels,
   getMasterPlaylistUrl,
   rewritePlaylist,
   getAdStats,
@@ -20,7 +21,6 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 const PORT = process.env.PORT || 3000;
 const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID || '';
 const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET || '';
-const DEFAULT_TWITCH_CHANNEL = (process.env.DEFAULT_TWITCH_CHANNEL || 'monstercat').toLowerCase();
 
 app.use(express.json());
 
@@ -38,37 +38,25 @@ app.use(
 app.use(express.static(path.join(__dirname, 'public')));
 
 // In-memory room state keyed by Discord Activity instanceId (or 'default' in browser)
+// Default channel is null -> opens on the interactive Twitch Home Page!
 const rooms = new Map();
 
 async function getOrCreateRoom(instanceId) {
   const id = instanceId || 'default';
   if (!rooms.has(id)) {
-    let initialChannel = DEFAULT_TWITCH_CHANNEL;
-    let initialHistory = [DEFAULT_TWITCH_CHANNEL, 'riotgames', 'caedrel', 'ibai'];
-
+    let initialHistory = ['caedrel', 'riotgames', 'ibai', 'shroud'];
     try {
-      const [defaultInfo, topStreams] = await Promise.all([
-        getStreamInfo(DEFAULT_TWITCH_CHANNEL).catch(() => null),
-        getTopLiveStreams(6).catch(() => []),
-      ]);
-
-      const topLogins = topStreams.map((s) => s.login);
-      if ((!defaultInfo || !defaultInfo.isLive) && topLogins.length > 0) {
-        initialChannel = topLogins[0];
-      }
-      if (topLogins.length > 0) {
-        initialHistory = [
-          initialChannel,
-          ...topLogins.filter((c) => c !== initialChannel),
-        ].slice(0, 8);
+      const topStreams = await getTopLiveStreams(6).catch(() => []);
+      if (topStreams.length > 0) {
+        initialHistory = topStreams.map((s) => s.login).slice(0, 8);
       }
     } catch {
-      // Fallback to static defaults
+      // ignore
     }
 
     rooms.set(id, {
-      channel: initialChannel,
-      updatedBy: 'Auto-Live',
+      channel: null, // null = Twitch Home Page browse screen
+      updatedBy: 'Twitch Home',
       updatedAt: Date.now(),
       history: initialHistory,
     });
@@ -82,7 +70,6 @@ async function getOrCreateRoom(instanceId) {
 app.get('/api/config', (req, res) => {
   res.json({
     clientId: DISCORD_CLIENT_ID,
-    defaultChannel: DEFAULT_TWITCH_CHANNEL,
     adStats: getAdStats(),
   });
 });
@@ -124,12 +111,15 @@ app.get('/api/room/:instanceId', async (req, res) => {
   res.json(room);
 });
 
-// Change channel in room (REST fallback in addition to WebSocket)
+// Change channel in room (or return to '__home__')
 app.post('/api/room/:instanceId/channel', async (req, res) => {
   const instanceId = req.params.instanceId || 'default';
   const { channel, username } = req.body || {};
-  if (!channel || typeof channel !== 'string') {
-    return res.status(400).json({ error: 'Channel name is required' });
+
+  if (channel === '__home__' || channel === null) {
+    const room = await updateRoomChannel(instanceId, null, username || 'Viewer');
+    broadcastToRoom(instanceId, { type: 'ROOM_STATE', room });
+    return res.json(room);
   }
 
   const cleanChannel = extractChannelName(channel);
@@ -146,10 +136,25 @@ app.post('/api/room/:instanceId/channel', async (req, res) => {
   res.json(room);
 });
 
-// Get currently top live Twitch streams
+// Get currently top live Twitch streams for the Home Page
 app.get('/api/twitch/top', async (req, res) => {
   try {
-    const streams = await getTopLiveStreams(8);
+    const streams = await getTopLiveStreams(24);
+    res.json({ streams });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Search live Twitch channels for the Home Page
+app.get('/api/twitch/search', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    if (!q) {
+      const streams = await getTopLiveStreams(24);
+      return res.json({ streams });
+    }
+    const streams = await searchLiveChannels(q, 20);
     res.json({ streams });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -164,6 +169,31 @@ app.get('/api/twitch/:channel/info', async (req, res) => {
     res.json(info);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// CSP-safe Image Proxy for Twitch thumbnails & avatars (*.jtvnw.net / *.ttvnw.net)
+app.get('/api/img', async (req, res) => {
+  const encoded = req.query.u;
+  if (!encoded || typeof encoded !== 'string') {
+    return res.status(400).end();
+  }
+  try {
+    const targetUrl = Buffer.from(encoded, 'base64url').toString('utf8');
+    if (!isAllowedUpstreamHost(targetUrl)) {
+      return res.status(403).end();
+    }
+    const upstream = await fetch(targetUrl);
+    if (!upstream.ok) return res.status(upstream.status).end();
+    res.setHeader('Content-Type', upstream.headers.get('content-type') || 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=120');
+    if (upstream.body) {
+      return Readable.fromWeb(upstream.body).pipe(res);
+    }
+    const buf = await upstream.arrayBuffer();
+    return res.end(Buffer.from(buf));
+  } catch {
+    return res.status(502).end();
   }
 });
 
@@ -199,7 +229,7 @@ app.get('/api/hls/:channel/master.m3u8', async (req, res) => {
   }
 });
 
-// Security helper: allow only Twitch/TTVNW/IVS HLS CDN hosts
+// Security helper: allow only Twitch/TTVNW/IVS HLS & image CDN hosts
 function isAllowedUpstreamHost(urlString) {
   try {
     const parsed = new URL(urlString);
@@ -211,6 +241,7 @@ function isAllowedUpstreamHost(urlString) {
       host.endsWith('.live-video.net') ||
       host === 'live-video.net' ||
       host.endsWith('.jtvnw.net') ||
+      host === 'jtvnw.net' ||
       host.endsWith('.twitch.tv') ||
       host === 'twitch.tv' ||
       host.endsWith('.cloudfront.net') ||
@@ -222,7 +253,6 @@ function isAllowedUpstreamHost(urlString) {
 }
 
 // Proxy HLS variant playlists (.m3u8) and transport stream segments (.ts / .mp4)
-// Streams binary segments directly without waiting for full buffer download to minimize latency.
 app.get('/api/hls/proxy', async (req, res) => {
   const encoded = req.query.u;
   if (!encoded || typeof encoded !== 'string') {
@@ -309,10 +339,12 @@ function extractChannelName(input) {
 
 async function updateRoomChannel(instanceId, channel, username) {
   const room = await getOrCreateRoom(instanceId);
-  room.channel = channel;
+  room.channel = channel; // null means Twitch Home view
   room.updatedBy = username || 'Viewer';
   room.updatedAt = Date.now();
-  room.history = [channel, ...room.history.filter((c) => c !== channel)].slice(0, 8);
+  if (channel) {
+    room.history = [channel, ...room.history.filter((c) => c !== channel)].slice(0, 8);
+  }
   return room;
 }
 
@@ -361,7 +393,20 @@ wss.on('connection', async (ws, req) => {
   ws.on('message', async (raw) => {
     try {
       const msg = JSON.parse(raw.toString());
-      if (msg.type === 'SET_CHANNEL' && msg.channel) {
+      if (msg.type === 'SET_CHANNEL') {
+        if (msg.channel === '__home__' || msg.channel === null) {
+          const updatedRoom = await updateRoomChannel(
+            instanceId,
+            null,
+            msg.username || 'Discord User'
+          );
+          broadcastToRoom(instanceId, {
+            type: 'ROOM_STATE',
+            room: updatedRoom,
+          });
+          return;
+        }
+
         const clean = extractChannelName(msg.channel);
         if (clean) {
           const updatedRoom = await updateRoomChannel(

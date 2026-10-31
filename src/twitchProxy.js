@@ -2,14 +2,18 @@ const TWITCH_GQL_URL = 'https://gql.twitch.tv/gql';
 // Standard public web Client-ID used by Twitch's web player
 const TWITCH_CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 
-// Player types ordered by ad-resistance & low-latency support (VAFT / TwitchAdSolutions strategy)
+// Player types ordered by ad-resistance & low-latency support
 const ADFREE_PLAYER_TYPES = ['embed', 'popout', 'site', 'thunderdome'];
 
-// Track adblocking stats per channel
 const adStats = {
   totalAdsStripped: 0,
   lastAdBlockedAt: null,
 };
+
+function toProxiedImage(url) {
+  if (!url) return '';
+  return `/api/img?u=${Buffer.from(url, 'utf8').toString('base64url')}`;
+}
 
 /**
  * Fetch stream metadata (live status, title, category, viewer count, broadcaster info)
@@ -66,7 +70,7 @@ async function getStreamInfo(channelLogin) {
     isLive: Boolean(stream && stream.type === 'live'),
     login: user.login,
     displayName: user.displayName,
-    avatar: user.profileImageURL,
+    avatar: toProxiedImage(user.profileImageURL),
     title: stream?.title || '',
     game: stream?.game?.name || 'Just Chatting',
     viewers: stream?.viewersCount ?? 0,
@@ -76,9 +80,9 @@ async function getStreamInfo(channelLogin) {
 }
 
 /**
- * Fetch top currently live streams on Twitch so the Activity always has live streams ready to click.
+ * Fetch top currently live streams on Twitch for the Twitch Home Page grid.
  */
-async function getTopLiveStreams(limit = 8) {
+async function getTopLiveStreams(limit = 24) {
   const query = `
     query GetTopStreams($first: Int!) {
       streams(first: $first) {
@@ -91,6 +95,7 @@ async function getTopLiveStreams(limit = 8) {
             }
             title
             viewersCount
+            previewImageURL(width: 440, height: 248)
             game {
               name
             }
@@ -124,10 +129,69 @@ async function getTopLiveStreams(limit = 8) {
     .map((n) => ({
       login: n.broadcaster.login.toLowerCase(),
       displayName: n.broadcaster.displayName,
-      avatar: n.broadcaster.profileImageURL,
+      avatar: toProxiedImage(n.broadcaster.profileImageURL),
+      thumbnail: toProxiedImage(n.previewImageURL),
       title: n.title || '',
       viewers: n.viewersCount || 0,
-      game: n.game?.name || '',
+      game: n.game?.name || 'Just Chatting',
+    }));
+}
+
+/**
+ * Search live channels on Twitch by keyword for the Home Page search bar.
+ */
+async function searchLiveChannels(searchQuery, limit = 16) {
+  const query = `
+    query SearchChannels($userQuery: String!, $first: Int!) {
+      searchFor(userQuery: $userQuery, platform: "web") {
+        channels(first: $first) {
+          edges {
+            item {
+              login
+              displayName
+              profileImageURL(width: 70)
+              stream {
+                id
+                title
+                viewersCount
+                previewImageURL(width: 440, height: 248)
+                game {
+                  name
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const response = await fetch(TWITCH_GQL_URL, {
+    method: 'POST',
+    headers: {
+      'Client-ID': TWITCH_CLIENT_ID,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      query,
+      variables: { userQuery: searchQuery.trim(), first: limit },
+    }),
+  });
+
+  if (!response.ok) return [];
+  const json = await response.json();
+  const edges = json?.data?.searchFor?.channels?.edges || [];
+  return edges
+    .map((e) => e?.item)
+    .filter((item) => item && item.login && item.stream)
+    .map((item) => ({
+      login: item.login.toLowerCase(),
+      displayName: item.displayName,
+      avatar: toProxiedImage(item.profileImageURL),
+      thumbnail: toProxiedImage(item.stream.previewImageURL),
+      title: item.stream.title || '',
+      viewers: item.stream.viewersCount || 0,
+      game: item.stream.game?.name || 'Live',
     }));
 }
 
@@ -207,12 +271,10 @@ function rewritePlaylist(m3u8Content, baseUrl) {
   const rawLines = m3u8Content.split(/\r?\n/);
   const isMediaPlaylist = rawLines.some((l) => l.startsWith('#EXTINF:'));
 
-  // Step 1: Filter out stitched ad segments & ad dateranges in media playlists
   const filteredLines = [];
   let skipNextUrl = false;
   let strippedCount = 0;
 
-  // Count how many genuine live segments exist in this playlist
   const liveSegmentCount = rawLines.filter(
     (l) => l.startsWith('#EXTINF:') && l.toLowerCase().includes('live')
   ).length;
@@ -222,7 +284,6 @@ function rewritePlaylist(m3u8Content, baseUrl) {
     const trimmed = line.trim();
 
     if (isMediaPlaylist) {
-      // Drop Twitch stitched-ad DATERANGE / SCTE35 markers
       if (
         trimmed.startsWith('#EXT-X-DATERANGE:') &&
         (trimmed.includes('twitch-stitched-ad') ||
@@ -237,8 +298,6 @@ function rewritePlaylist(m3u8Content, baseUrl) {
         continue;
       }
 
-      // If an #EXTINF segment is an ad (e.g., #EXTINF:2.002,Amazon or not ',live')
-      // and we still have genuine live segments or prefetch segments available, strip the ad segment!
       if (trimmed.startsWith('#EXTINF:')) {
         const isAdSegment =
           !trimmed.toLowerCase().includes(',live') ||
@@ -266,8 +325,6 @@ function rewritePlaylist(m3u8Content, baseUrl) {
     adStats.lastAdBlockedAt = Date.now();
   }
 
-  // Step 2: Convert #EXT-X-TWITCH-PREFETCH low-latency segments into standard playable live tail segments
-  // so hls.js can play right at the sub-2-second live edge!
   const processedLines = [];
   for (const line of filteredLines) {
     const trimmed = line.trim();
@@ -282,7 +339,6 @@ function rewritePlaylist(m3u8Content, baseUrl) {
     processedLines.push(line);
   }
 
-  // Step 3: Rewrite all URLs to route through `/api/hls/proxy?u=...`
   const rewritten = processedLines.map((line) => {
     const trimmed = line.trim();
     if (!trimmed) return line;
@@ -314,6 +370,7 @@ function getAdStats() {
 module.exports = {
   getStreamInfo,
   getTopLiveStreams,
+  searchLiveChannels,
   getMasterPlaylistUrl,
   rewritePlaylist,
   getAdStats,

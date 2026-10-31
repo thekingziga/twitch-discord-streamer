@@ -1,5 +1,15 @@
 const video = document.getElementById('videoPlayer');
 const videoStage = document.getElementById('videoStage');
+const homeView = document.getElementById('homeView');
+const homeGrid = document.getElementById('homeGrid');
+const homeHeading = document.getElementById('homeHeading');
+const homeSearchInput = document.getElementById('homeSearchInput');
+const refreshHomeBtn = document.getElementById('refreshHomeBtn');
+const homeBtn = document.getElementById('homeBtn');
+const quickHomeChip = document.getElementById('quickHomeChip');
+const playerControlsGroup = document.getElementById('playerControlsGroup');
+const streamFooter = document.getElementById('streamFooter');
+
 const channelForm = document.getElementById('channelForm');
 const channelInput = document.getElementById('channelInput');
 const qualitySelect = document.getElementById('qualitySelect');
@@ -28,12 +38,13 @@ const twitchViewerStat = document.getElementById('twitchViewerStat');
 const twitchViewerCount = document.getElementById('twitchViewerCount');
 
 let hls = null;
-let currentChannel = null;
+let currentChannel = undefined; // null = Home View, string = active Twitch channel
 let instanceId = 'default';
 let currentUsername = 'Viewer';
 let ws = null;
 let metadataTimer = null;
 let latencyTimer = null;
+let searchDebounce = null;
 
 /**
  * Initialize Discord Embedded App SDK if launched inside a Discord Activity iframe.
@@ -82,7 +93,6 @@ function toggleFullscreenMode() {
   fullscreenBtn.textContent = isFullscreenClass ? '✕ Exit Fullscreen' : '⛶ Fullscreen';
   floatingFsBtn.textContent = isFullscreenClass ? '✕' : '⛶';
 
-  // Also request native document fullscreen if allowed by the host container
   if (isFullscreenClass) {
     if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
       document.documentElement.requestFullscreen().catch(() => {});
@@ -100,8 +110,12 @@ video.addEventListener('dblclick', (e) => {
 });
 
 window.addEventListener('keydown', (e) => {
-  // Ignore shortcuts when typing in channel input
-  if (document.activeElement === channelInput) return;
+  if (
+    document.activeElement === channelInput ||
+    document.activeElement === homeSearchInput
+  ) {
+    return;
+  }
   if (e.key === 'f' || e.key === 'F') {
     e.preventDefault();
     toggleFullscreenMode();
@@ -127,6 +141,119 @@ function setOverlay(visible, title = '', subtitle = '', showSpinner = true) {
     statusSpinner.classList.add('hidden');
   }
 }
+
+/**
+ * Format viewer counts (e.g. 235400 -> 235.4K)
+ */
+function formatViewerCount(num) {
+  const n = Number(num || 0);
+  if (n >= 1000) {
+    return `${(n / 1000).toFixed(1)}K viewers`;
+  }
+  return `${n} viewers`;
+}
+
+/**
+ * Fetch and render the Twitch Home Page live stream grid
+ */
+async function loadTwitchHomeStreams(searchQuery = '') {
+  homeGrid.innerHTML =
+    '<p style="color:#adadb8;font-size:0.9rem;">Loading live Twitch channels...</p>';
+
+  try {
+    const endpoint = searchQuery.trim()
+      ? `/api/twitch/search?q=${encodeURIComponent(searchQuery.trim())}`
+      : '/api/twitch/top';
+
+    const res = await fetch(endpoint);
+    if (!res.ok) throw new Error('Failed to load streams');
+    const data = await res.json();
+    const streams = data.streams || [];
+
+    homeHeading.textContent = searchQuery.trim()
+      ? `Live Search Results for "${searchQuery.trim()}"`
+      : 'Live Channels on Twitch';
+
+    if (streams.length === 0) {
+      homeGrid.innerHTML =
+        '<p style="color:#adadb8;font-size:0.9rem;">No live streams found matching that search.</p>';
+      return;
+    }
+
+    homeGrid.innerHTML = '';
+    streams.forEach((s) => {
+      const card = document.createElement('article');
+      card.className = 'stream-card';
+      card.innerHTML = `
+        <div class="card-thumb-wrap">
+          <img class="card-thumb" src="${s.thumbnail}" alt="${s.displayName}" loading="lazy" />
+          <span class="card-live-pill">LIVE</span>
+          <span class="card-viewers-pill">🔴 ${formatViewerCount(s.viewers)}</span>
+        </div>
+        <div class="card-body">
+          <img class="card-avatar" src="${s.avatar}" alt="${s.displayName}" loading="lazy" />
+          <div class="card-info">
+            <div class="card-title" title="${(s.title || '').replace(/"/g, '&quot;')}">${
+        s.title || s.displayName
+      }</div>
+            <div class="card-streamer">${s.displayName}</div>
+            <span class="card-game">${s.game || 'Live'}</span>
+          </div>
+        </div>
+      `;
+      card.addEventListener('click', () => requestChannelSwitch(s.login));
+      homeGrid.appendChild(card);
+    });
+  } catch (err) {
+    homeGrid.innerHTML =
+      '<p style="color:#adadb8;font-size:0.9rem;">Could not load live streams right now. Try clicking Refresh.</p>';
+  }
+}
+
+/**
+ * Switch UI to the Twitch Home Page browse view
+ */
+function showHomeView() {
+  currentChannel = null;
+  channelInput.value = '';
+
+  if (hls) {
+    hls.destroy();
+    hls = null;
+  }
+  video.pause();
+  video.removeAttribute('src');
+
+  if (metadataTimer) clearInterval(metadataTimer);
+  if (latencyTimer) clearInterval(latencyTimer);
+
+  videoStage.classList.add('hidden');
+  streamFooter.classList.add('hidden');
+  playerControlsGroup.classList.add('hidden');
+  homeView.classList.remove('hidden');
+  quickHomeChip.classList.add('active');
+
+  loadTwitchHomeStreams(homeSearchInput.value);
+}
+
+refreshHomeBtn.addEventListener('click', () => {
+  loadTwitchHomeStreams(homeSearchInput.value);
+});
+
+homeSearchInput.addEventListener('input', () => {
+  if (searchDebounce) clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(() => {
+    loadTwitchHomeStreams(homeSearchInput.value);
+  }, 350);
+});
+
+homeBtn.addEventListener('click', () => {
+  requestChannelSwitch('__home__');
+});
+
+quickHomeChip.addEventListener('click', () => {
+  requestChannelSwitch('__home__');
+});
 
 /**
  * Fetch and display Twitch channel metadata (title, game, live viewers, avatar, ads blocked)
@@ -201,12 +328,10 @@ function startLowLatencyMonitor() {
     if (Number.isFinite(delay)) {
       latencyTextEl.textContent = `⚡ ${delay.toFixed(1)}s`;
 
-      // If stream drifted > 6s behind live edge, snap directly to live edge
       if (delay > 6.0) {
         video.currentTime = liveEdge - 1.8;
         video.playbackRate = 1.0;
       } else if (delay > 2.8) {
-        // Smoothly catch up at 1.12x speed without audio pitch distortion
         video.playbackRate = 1.12;
       } else if (video.playbackRate !== 1.0) {
         video.playbackRate = 1.0;
@@ -223,6 +348,12 @@ async function loadTwitchStream(channel) {
   if (!normalized || normalized === currentChannel) return;
   currentChannel = normalized;
   channelInput.value = normalized;
+
+  homeView.classList.add('hidden');
+  videoStage.classList.remove('hidden');
+  streamFooter.classList.remove('hidden');
+  playerControlsGroup.classList.remove('hidden');
+  quickHomeChip.classList.remove('active');
 
   setOverlay(
     true,
@@ -273,7 +404,7 @@ async function loadTwitchStream(channel) {
             setOverlay(
               true,
               `${normalized} is offline or unavailable`,
-              'Try picking another live Twitch channel above.',
+              'Click "Twitch Home" at the top left to browse live channels.',
               false
             );
             break;
@@ -367,7 +498,7 @@ liveEdgeBtn.addEventListener('click', () => {
 /**
  * Render quick-switch channel history chips
  */
-function renderHistoryChips(history = [], activeChannel = '') {
+function renderHistoryChips(history = [], activeChannel = null) {
   historyChipsEl.innerHTML = '';
   history.forEach((ch) => {
     const btn = document.createElement('button');
@@ -380,10 +511,10 @@ function renderHistoryChips(history = [], activeChannel = '') {
 }
 
 /**
- * Broadcast channel switch to everyone in the same Discord Activity instance
+ * Broadcast channel switch (or '__home__') to everyone in the same Discord Activity instance
  */
 async function requestChannelSwitch(rawInput) {
-  const trimmed = rawInput.trim();
+  const trimmed = rawInput ? rawInput.trim() : '__home__';
   if (!trimmed) return;
 
   if (ws && ws.readyState === WebSocket.OPEN) {
@@ -410,11 +541,19 @@ async function requestChannelSwitch(rawInput) {
 function applyRoomState(room) {
   if (!room) return;
   renderHistoryChips(room.history || [], room.channel);
-  if (room.updatedBy) {
-    syncedByTextEl.textContent = `Switched to ${room.channel} by ${room.updatedBy}`;
-  }
-  if (room.channel && room.channel !== currentChannel) {
-    loadTwitchStream(room.channel);
+
+  if (!room.channel) {
+    syncedByTextEl.textContent = 'Browsing Twitch Home';
+    if (currentChannel !== null) {
+      showHomeView();
+    }
+  } else {
+    if (room.updatedBy) {
+      syncedByTextEl.textContent = `Switched to ${room.channel} by ${room.updatedBy}`;
+    }
+    if (room.channel !== currentChannel) {
+      loadTwitchStream(room.channel);
+    }
   }
 }
 
@@ -448,7 +587,11 @@ function connectRoomWebSocket() {
 
 channelForm.addEventListener('submit', (e) => {
   e.preventDefault();
-  requestChannelSwitch(channelInput.value);
+  if (!channelInput.value.trim()) {
+    requestChannelSwitch('__home__');
+  } else {
+    requestChannelSwitch(channelInput.value);
+  }
 });
 
 // Boot the app
@@ -461,8 +604,10 @@ channelForm.addEventListener('submit', (e) => {
     if (res.ok) {
       const room = await res.json();
       applyRoomState(room);
+    } else {
+      showHomeView();
     }
   } catch {
-    loadTwitchStream('monstercat');
+    showHomeView();
   }
 })();
