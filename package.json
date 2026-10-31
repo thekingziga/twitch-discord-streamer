@@ -1,0 +1,16 @@
+{
+  "name": "twitch-discord-activity",
+  "version": "1.0.0",
+  "description": "Discord Activity (Watch Together) for live Twitch streams",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@discord/embedded-app-sdk": "^2.4.0",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "hls.js": "^1.6.15",
+    "ws": "^8.20.0"
+  }
+}

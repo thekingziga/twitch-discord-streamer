@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Twitch Watch Party — Discord Activity</title>
+  <link rel="stylesheet" href="/style.css" />
+  <script src="/vendor/hls/hls.min.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Top Control Bar -->
+    <header class="top-bar">
+      <div class="brand">
+        <div class="twitch-logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+            <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z"/>
+          </svg>
+        </div>
+        <span class="brand-title">Twitch Party</span>
+        <span id="sdkBadge" class="sdk-badge" title="Connection mode">Browser Mode</span>
+        <span id="adblockBadge" class="adblock-badge" title="HLS Stream AdBlocker & Low-Latency Prefetch Active">
+          🛡️ AdBlock ON
+        </span>
+      </div>
+
+      <form id="channelForm" class="channel-form" autocomplete="off">
+        <input
+          id="channelInput"
+          type="text"
+          placeholder="Enter Twitch streamer or paste URL (e.g. shroud)..."
+          spellcheck="false"
+        />
+        <button type="submit" class="btn-primary">Watch Together</button>
+      </form>
+
+      <div class="right-controls">
+        <div class="control-group">
+          <label for="qualitySelect" class="sr-only">Quality</label>
+          <select id="qualitySelect" class="select-control" title="Stream Quality">
+            <option value="-1">Quality: Auto</option>
+          </select>
+        </div>
+
+        <button id="liveEdgeBtn" type="button" class="btn-ghost" title="Click to jump to real-time live edge">
+          <span class="live-dot"></span>
+          <span>LIVE</span>
+          <span id="latencyText" class="latency-text">⚡</span>
+        </button>
+
+        <div class="room-pill" title="Viewers synced in this Discord Voice Channel">
+          <span>👥</span>
+          <span id="roomViewerCount">1</span>
+        </div>
+
+        <button id="fullscreenBtn" type="button" class="btn-ghost" title="Toggle Fullscreen (F or Double-Click Video)">
+          ⛶ Fullscreen
+        </button>
+      </div>
+    </header>
+
+    <!-- Quick-Switch Channel History Bar -->
+    <div class="quick-bar">
+      <span class="quick-label">Quick switch:</span>
+      <div id="historyChips" class="chips-list"></div>
+      <span id="syncedByText" class="synced-by"></span>
+    </div>
+
+    <!-- Main Video Stage -->
+    <main id="videoStage" class="video-stage">
+      <video
+        id="videoPlayer"
+        playsinline
+        controls
+        autoplay
+        controlslist="nofullscreen nodownload noremoteplayback"
+      ></video>
+
+      <!-- Floating Fullscreen Toggle inside Video Stage (always works inside Discord Activity iframe) -->
+      <button
+        id="floatingFsBtn"
+        type="button"
+        class="floating-fs-btn"
+        title="Toggle Fullscreen (Press F or Double-Click Video)"
+      >
+        ⛶
+      </button>
+
+      <!-- Unmute / Autoplay Banner -->
+      <button id="unmuteBanner" class="unmute-banner hidden" type="button">
+        🔊 Click to Unmute Stream Audio
+      </button>
+
+      <!-- Status Overlay (Loading / Offline / Error) -->
+      <div id="statusOverlay" class="status-overlay">
+        <div class="spinner" id="statusSpinner"></div>
+        <h2 id="statusTitle">Connecting to Twitch stream...</h2>
+        <p id="statusSubtitle">Fetching low-latency HLS stream...</p>
+      </div>
+    </main>
+
+    <!-- Bottom Stream Metadata Footer -->
+    <footer class="stream-footer">
+      <div class="streamer-meta">
+        <img
+          id="streamerAvatar"
+          class="streamer-avatar hidden"
+          src=""
+          alt="Streamer avatar"
+        />
+        <div class="streamer-text">
+          <div class="streamer-headline">
+            <span id="streamerName" class="streamer-name">Loading...</span>
+            <span id="liveBadge" class="badge-live hidden">LIVE</span>
+            <span id="streamerCategory" class="streamer-category"></span>
+          </div>
+          <p id="streamTitle" class="stream-title">Select a Twitch channel above to start watching together.</p>
+        </div>
+      </div>
+
+      <div class="stream-stats">
+        <div id="twitchViewerStat" class="stat-pill hidden" title="Live viewers on Twitch">
+          <span class="stat-dot"></span>
+          <span id="twitchViewerCount">0</span> watching on Twitch
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+services:
+  twitch-discord-activity:
+    image: thekingziga/twitch-discord-streamer:latest
+    container_name: twitch-discord-activity
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - PORT=3000
+      - DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID:-1566158462042378290}
+      - DISCORD_CLIENT_SECRET=${DISCORD_CLIENT_SECRET:-}
+      - DEFAULT_TWITCH_CHANNEL=${DEFAULT_TWITCH_CHANNEL:-monstercat}
